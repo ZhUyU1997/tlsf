@@ -216,7 +216,7 @@ enum tlsf_private
 {
 #if defined (TLSF_64BIT)
 	/* All allocation sizes and addresses are aligned to 8 bytes. */
-	ALIGN_SIZE_LOG2 = 3,
+	ALIGN_SIZE_LOG2 = 4,
 #else
 	/* All allocation sizes and addresses are aligned to 4 bytes. */
 	ALIGN_SIZE_LOG2 = 2,
@@ -305,8 +305,8 @@ typedef struct block_header_t
 	struct block_header_t* prev_phys_block;
 
 	/* The size of this block, excluding the block header. */
+	size_t size2;
 	size_t size;
-
 	/* Next and previous free blocks. */
 	struct block_header_t* next_free;
 	struct block_header_t* prev_free;
@@ -456,6 +456,7 @@ static void block_mark_as_free(block_header_t* block)
 	block_header_t* next = block_link_next(block);
 	block_set_prev_free(next);
 	block_set_free(block);
+	printf("block_mark_as_free: prev:%p block:%p next:%p\n",block->prev_phys_block,block, block_next(block));
 }
 
 static void block_mark_as_used(block_header_t* block)
@@ -650,12 +651,13 @@ static block_header_t* block_split(block_header_t* block, size_t size)
 	block_header_t* remaining =
 		offset_to_block(block_to_ptr(block), size - block_header_overhead);
 
-	const size_t remain_size = block_size(block) - (size + block_header_overhead);
+	const size_t remain_size = block_size(block) - (size + ALIGN_SIZE);
+	printf("block->size:%lu, size:%lu,remain_size:%lu\n",block->size,size,remain_size);
 
 	tlsf_assert(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining), ALIGN_SIZE)
 		&& "remaining block not aligned properly");
 
-	tlsf_assert(block_size(block) == remain_size + size + block_header_overhead);
+	tlsf_assert(block_size(block) == remain_size + size + ALIGN_SIZE);
 	block_set_size(remaining, remain_size);
 	tlsf_assert(block_size(remaining) >= block_size_min && "block split with invalid size");
 
@@ -670,7 +672,7 @@ static block_header_t* block_absorb(block_header_t* prev, block_header_t* block)
 {
 	tlsf_assert(!block_is_last(prev) && "previous block can't be last");
 	/* Note: Leaves flags untouched. */
-	prev->size += block_size(block) + block_header_overhead;
+	prev->size += block_size(block) + ALIGN_SIZE;
 	block_link_next(prev);
 	return prev;
 }
@@ -680,6 +682,8 @@ static block_header_t* block_merge_prev(control_t* control, block_header_t* bloc
 {
 	if (block_is_prev_free(block))
 	{
+		printf("block_merge_prev: prev:%p block:%p next:%p\n",block->prev_phys_block,block, block_next(block));
+
 		block_header_t* prev = block_prev(block);
 		tlsf_assert(prev && "prev physical block can't be null");
 		tlsf_assert(block_is_free(prev) && "prev block is not free though marked as such");
@@ -712,7 +716,10 @@ static void block_trim_free(control_t* control, block_header_t* block, size_t si
 	tlsf_assert(block_is_free(block) && "block must be free");
 	if (block_can_split(block, size))
 	{
+		printf("block_trim_free0: prev:%p block:%p next:%p\n",block->prev_phys_block,block, block_next(block));
 		block_header_t* remaining_block = block_split(block, size);
+		printf("block_trim_free1: prev:%p block:%p next:%p\n",block->prev_phys_block,block, block_next(block));
+
 		block_link_next(block);
 		block_set_prev_free(remaining_block);
 		block_insert(control, remaining_block);
@@ -758,7 +765,7 @@ static block_header_t* block_locate_free(control_t* control, size_t size)
 	if (size)
 	{
 		mapping_search(size, &fl, &sl);
-		
+		printf("mapping_search:%d %d\n",fl,sl);
 		/*
 		** mapping_search can futz with the size, so for excessively large sizes it can sometimes wind up 
 		** with indices that are off the end of the block array.
@@ -773,6 +780,7 @@ static block_header_t* block_locate_free(control_t* control, size_t size)
 
 	if (block)
 	{
+		printf("block_locate_free:block:%p block->size:%lu size：%lu\n",block,block_size(block),size);
 		tlsf_assert(block_size(block) >= size);
 		remove_free_block(control, block, fl, sl);
 	}
@@ -1116,6 +1124,7 @@ void* tlsf_malloc(tlsf_t tlsf, size_t size)
 {
 	control_t* control = tlsf_cast(control_t*, tlsf);
 	const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
+	printf("size:%lu adjust:%lu\n",size,adjust);
 	block_header_t* block = block_locate_free(control, adjust);
 	return block_prepare_used(control, block, adjust);
 }
