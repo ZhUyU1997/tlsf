@@ -216,10 +216,10 @@ enum tlsf_private
 {
 #if defined (TLSF_64BIT)
 	/* All allocation sizes and addresses are aligned to 8 bytes. */
-	ALIGN_SIZE_LOG2 = 3,
+	ALIGN_SIZE_LOG2 = 4,
 #else
 	/* All allocation sizes and addresses are aligned to 4 bytes. */
-	ALIGN_SIZE_LOG2 = 2,
+	ALIGN_SIZE_LOG2 = 3,
 #endif
 	ALIGN_SIZE = (1 << ALIGN_SIZE_LOG2),
 
@@ -301,8 +301,12 @@ tlsf_static_assert(ALIGN_SIZE == SMALL_BLOCK_SIZE / SL_INDEX_COUNT);
 */
 typedef struct block_header_t
 {
-	/* Points to the previous physical block. */
-	struct block_header_t* prev_phys_block;
+	union
+	{
+		/* Points to the previous physical block. */
+		struct block_header_t* prev_phys_block;
+		char align_data[ALIGN_SIZE];
+	};
 
 	/* The size of this block, excluding the block header. */
 	size_t size;
@@ -650,12 +654,12 @@ static block_header_t* block_split(block_header_t* block, size_t size)
 	block_header_t* remaining =
 		offset_to_block(block_to_ptr(block), size - block_header_overhead);
 
-	const size_t remain_size = block_size(block) - (size + block_header_overhead);
+	const size_t remain_size = block_size(block) - (size + ALIGN_SIZE);
 
 	tlsf_assert(block_to_ptr(remaining) == align_ptr(block_to_ptr(remaining), ALIGN_SIZE)
 		&& "remaining block not aligned properly");
 
-	tlsf_assert(block_size(block) == remain_size + size + block_header_overhead);
+	tlsf_assert(block_size(block) == remain_size + size + ALIGN_SIZE);
 	block_set_size(remaining, remain_size);
 	tlsf_assert(block_size(remaining) >= block_size_min && "block split with invalid size");
 
@@ -670,7 +674,7 @@ static block_header_t* block_absorb(block_header_t* prev, block_header_t* block)
 {
 	tlsf_assert(!block_is_last(prev) && "previous block can't be last");
 	/* Note: Leaves flags untouched. */
-	prev->size += block_size(block) + block_header_overhead;
+	prev->size += block_size(block) + ALIGN_SIZE;
 	block_link_next(prev);
 	return prev;
 }
@@ -740,7 +744,7 @@ static block_header_t* block_trim_free_leading(control_t* control, block_header_
 	if (block_can_split(block, size))
 	{
 		/* We want the 2nd block. */
-		remaining_block = block_split(block, size - block_header_overhead);
+		remaining_block = block_split(block, size - ALIGN_SIZE);
 		block_set_prev_free(remaining_block);
 
 		block_link_next(block);
@@ -944,7 +948,7 @@ int tlsf_check_pool(pool_t pool)
 */
 size_t tlsf_size(void)
 {
-	return sizeof(control_t);
+	return align_up(sizeof(control_t), ALIGN_SIZE);
 }
 
 size_t tlsf_align_size(void)
@@ -1226,7 +1230,7 @@ void* tlsf_realloc(tlsf_t tlsf, void* ptr, size_t size)
 		block_header_t* next = block_next(block);
 
 		const size_t cursize = block_size(block);
-		const size_t combined = cursize + block_size(next) + block_header_overhead;
+		const size_t combined = cursize + block_size(next) + ALIGN_SIZE;
 		const size_t adjust = adjust_request_size(size, ALIGN_SIZE);
 
 		tlsf_assert(!block_is_free(block) && "block already marked as free");
